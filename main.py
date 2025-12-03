@@ -9,8 +9,8 @@
 import argparse
 import collections
 from dataclasses import dataclass
+import datetime
 from enum import Enum, auto
-from pprint import pprint
 import asyncio
 import struct
 import sys
@@ -45,6 +45,7 @@ class State:
     state_machine: SM
     device_info: DeviceInfo
     integration_time: float
+    start_time: datetime.datetime
     response_data: bytearray
     response_length: int
     response_future: asyncio.Future
@@ -105,7 +106,7 @@ async def notify_handler(sender: bleak.BleakGATTCharacteristic, data: bytearray)
             s.response_future.set_result(None)
 
         case _:
-            assert False
+            print(f"Unexpected message: {data.hex()}", file=sys.stderr)
 
 
 
@@ -152,13 +153,17 @@ def process_result(data: bytearray) -> tuple[dict[str, float], list[float]]:
 
 def print_result(processed: tuple[dict[str, float], list[float]]):
     fields, spectrum = processed
+
     if not s.header_printed:
+        print('timestamp', end=',')
         for name in fields:
             print(name, end=',')
         for i in range(fields["StartTestWave"], fields["EndTestWave"] + 1):
             print(i, end='nm,')
         print()
         s.header_printed = True
+
+    print(s.start_time.isoformat(), end=',')
     for value in fields.values():
         print(value, end=',')
     for i in range(fields["EndTestWave"] - fields["StartTestWave"] + 1):
@@ -167,6 +172,7 @@ def print_result(processed: tuple[dict[str, float], list[float]]):
 
 
 async def capture_sample():
+    s.start_time = datetime.datetime.now()
     await command(SM.StartSamping, "8C0E01")
 
     wait_time = s.integration_time + 500 if s.integration_time > 500 else 1000
@@ -185,7 +191,7 @@ async def capture_sample():
     try:
         raw_result = await command(SM.ReadTestResult, "8C1331", 3)
     except TimeoutError:
-        print("Failed to read test result", file=sys.stderr)
+        print(f"Failed to read test result at {s.start_time.isoformat()}, retrying", file=sys.stderr)
         return False
     result = process_result(raw_result)
     print_result(result)
@@ -200,7 +206,8 @@ async def main(continuous: bool):
 
     print("Searching for HPCS devices", file=sys.stderr)
     device = await bleak.BleakScanner.find_device_by_filter(
-        lambda d, ad: d.name and d.name.startswith("HPCS")
+        lambda d, ad: d.name and d.name.startswith("HPCS"),
+        timeout=60
     )
     if not device:
         print("No HPCS device found", file=sys.stderr)
@@ -222,12 +229,13 @@ async def main(continuous: bool):
         s.integration_time = await command(SM.ReadIntegTime, "8C05")
         # print(f'integration time estimate: {s.integration_time}')
 
-        while True:
-            got = await capture_sample()
-            if got and not continuous:
-                break
-
-        await command(SM.Stop, "8C25")
+        try:
+            while True:
+                got = await capture_sample()
+                if got and not continuous:
+                    break
+        finally:
+            await command(SM.Stop, "8C25")
 
 
 def parse_args():
