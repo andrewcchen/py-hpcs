@@ -50,7 +50,7 @@ def write_tsv(rows: list[list[str]], handle) -> None:
 
 def main() -> None:
     args = parse_args()
-    if args.input is None:
+    if args.input:
         with args.input.open(newline="") as handle:
             matrix = read_selected_rows(handle)
     else:

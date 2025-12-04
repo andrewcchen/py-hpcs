@@ -7,11 +7,13 @@
 # ///
 
 import argparse
+import asyncio
 import collections
 from dataclasses import dataclass
 import datetime
 from enum import Enum, auto
-import asyncio
+import os
+import signal
 import struct
 import sys
 
@@ -109,7 +111,6 @@ async def notify_handler(sender: bleak.BleakGATTCharacteristic, data: bytearray)
             print(f"Unexpected message: {data.hex()}", file=sys.stderr)
 
 
-
 async def command(sm: SM, hex: str, timeout=1):
     s.state_machine = sm
     s.response_future = s.loop.create_future()
@@ -200,8 +201,8 @@ async def capture_sample():
     return True
 
 
-async def main(continuous: bool):
-    s.loop = asyncio.get_event_loop()
+async def main(args):
+    s.loop = asyncio.get_running_loop()
     s.response_data = bytearray()
 
     print("Searching for HPCS devices", file=sys.stderr)
@@ -230,9 +231,13 @@ async def main(continuous: bool):
         # print(f'integration time estimate: {s.integration_time}')
 
         try:
+            got = True
             while True:
+                if args.interactive or not got:
+                    print("Press enter to take a sample", file=sys.stderr, end="")
+                    await s.loop.run_in_executor(None, input)
                 got = await capture_sample()
-                if got and not continuous:
+                if got and not args.continuous:
                     break
         finally:
             await command(SM.Stop, "8C25")
@@ -241,9 +246,9 @@ async def main(continuous: bool):
 def parse_args():
     parser = argparse.ArgumentParser(description="Capture spectrum from HPCS-310 and HPCS-330")
     parser.add_argument("-c", "--continuous", action="store_true", help="Continue sampling until interrupted")
+    parser.add_argument("-i", "--interactive", action="store_true", help="Press enter before each sample")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    asyncio.run(main(args.continuous))
+    asyncio.run(main(parse_args()))
