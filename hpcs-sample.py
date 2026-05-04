@@ -1,21 +1,14 @@
-#!/usr/bin/env -S uv run --script
-
-# /// script
-# dependencies = [
-#   "bleak==2.*",
-# ]
-# ///
+#!/usr/bin/env python3
 
 import argparse
 import asyncio
 import collections
-from dataclasses import dataclass
 import datetime
-from enum import Enum, auto
-import os
-import signal
 import struct
 import sys
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from enum import Enum, auto
 
 import bleak
 
@@ -172,7 +165,7 @@ def print_result(processed: tuple[dict[str, float], list[float]]):
     print()
 
 
-async def capture_sample():
+async def capture_processed_sample():
     s.start_time = datetime.datetime.now()
     await command(SM.StartSamping, "8C0E01")
 
@@ -195,42 +188,78 @@ async def capture_sample():
         print(f"Failed to read test result at {s.start_time.isoformat()}, retrying", file=sys.stderr)
         return False
     result = process_result(raw_result)
-    print_result(result)
-
     s.integration_time = result[0]["IntegTime0"]
+    return result
+
+
+async def capture_sample():
+    result = await capture_processed_sample()
+    if result is False:
+        return False
+    print_result(result)
     return True
 
 
-async def main(args):
+def extract_spectrum_range(
+    processed: tuple[dict[str, float], list[float]],
+    start_nm: int,
+    end_nm: int,
+) -> list[float]:
+    fields, spectrum = processed
+    if fields["StartTestWave"] > start_nm or fields["EndTestWave"] < end_nm:
+        raise RuntimeError(
+            f"Sample bands {fields['StartTestWave']}-{fields['EndTestWave']} do not cover "
+            f"{start_nm}-{end_nm}"
+        )
+    start_index = start_nm - fields["StartTestWave"]
+    end_index = end_nm - fields["StartTestWave"] + 1
+    return spectrum[start_index:end_index]
+
+
+async def find_device():
+    print("Searching for HPCS devices", file=sys.stderr)
+    return await bleak.BleakScanner.find_device_by_filter(
+        lambda d, ad: d.name and d.name.startswith("HPCS"),
+        timeout=60,
+    )
+
+
+async def initialize_device(client: bleak.BleakClient):
+    s.client = client
+    await asyncio.sleep(1)
+
+    s.state_machine = SM.Idle
+    await client.start_notify(CHAR_UUID, notify_handler)
+    await asyncio.sleep(1)
+
+    s.device_info = await command(SM.GetDeviceInfo, "8CEE")
+    print(s.device_info, file=sys.stderr)
+
+    s.integration_time = await command(SM.ReadIntegTime, "8C05")
+
+
+@asynccontextmanager
+async def device_session():
     s.loop = asyncio.get_running_loop()
     s.response_data = bytearray()
 
-    print("Searching for HPCS devices", file=sys.stderr)
-    device = await bleak.BleakScanner.find_device_by_filter(
-        lambda d, ad: d.name and d.name.startswith("HPCS"),
-        timeout=60
-    )
+    device = await find_device()
     if not device:
-        print("No HPCS device found", file=sys.stderr)
-        sys.exit(1)
+        raise RuntimeError("No HPCS device found")
 
     print(f"Connecting to {device.name}", file=sys.stderr)
     async with bleak.BleakClient(device) as client:
-        s.client = client
         print(f"Connected to {device.name}", file=sys.stderr)
-        await asyncio.sleep(1)
-
-        s.state_machine = SM.Idle
-        await client.start_notify(CHAR_UUID, notify_handler)
-        await asyncio.sleep(1)
-
-        s.device_info = await command(SM.GetDeviceInfo, "8CEE")
-        print(s.device_info, file=sys.stderr)
-
-        s.integration_time = await command(SM.ReadIntegTime, "8C05")
-        # print(f'integration time estimate: {s.integration_time}')
-
+        await initialize_device(client)
         try:
+            yield client
+        finally:
+            await command(SM.Stop, "8C25")
+
+
+async def main(args):
+    try:
+        async with device_session():
             got = True
             while True:
                 if args.interactive or not got:
@@ -239,8 +268,9 @@ async def main(args):
                 got = await capture_sample()
                 if got and not args.continuous:
                     break
-        finally:
-            await command(SM.Stop, "8C25")
+    except RuntimeError as exc:
+        print(exc, file=sys.stderr)
+        sys.exit(1)
 
 
 def parse_args():
