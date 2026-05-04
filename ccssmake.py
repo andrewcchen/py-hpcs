@@ -61,7 +61,7 @@ def parse_args():
     parser.add_argument(
         "--local",
         action="store_true",
-        help="Display the W/R/G/B patches locally with `display` and prompt once before sampling",
+        help="Display the W/R/G/B patches locally",
     )
     return parser.parse_args()
 
