@@ -240,6 +240,8 @@ def parse_request(line: str) -> tuple[str, str | None]:
 
 
 def handle_measure_request(ctx: ServerContext, command_path: str | None) -> None:
+    if not ctx.ready_event.is_set():
+        print("Still searching for HPCS device", file=sys.stderr, flush=True)
     future = asyncio.run_coroutine_threadsafe(
         wait_for_device_ready(ctx.ready_event, ctx.device_task),
         ctx.loop,
@@ -363,7 +365,7 @@ def parse_wrapper_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "command",
         nargs=argparse.REMAINDER,
-        help="Argyll command to run, for example: dispread",
+        help="Argyll command to run, for example: ccxxmake -S",
     )
     return parser.parse_args(argv)
 
@@ -377,7 +379,7 @@ async def wrapper_main(argv: list[str]) -> int:
         print("Do not pass -M explicitly; argyll.py manages it", file=sys.stderr)
         return 2
 
-    with tempfile.TemporaryDirectory(prefix="argyll-hpcs-") as tmp_dir:
+    with tempfile.TemporaryDirectory(prefix="hpcs-argyll-") as tmp_dir:
         tmp_path = Path(tmp_dir)
         request_fifo = tmp_path / "hpcs-request.fifo"
         response_fifo = tmp_path / "hpcs-response.fifo"

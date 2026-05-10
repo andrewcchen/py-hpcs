@@ -221,10 +221,10 @@ def extract_spectrum_range(
 
 
 async def find_device():
-    print("Searching for HPCS devices", file=sys.stderr)
+    print("Searching for HPCS device", file=sys.stderr)
     return await bleak.BleakScanner.find_device_by_filter(
         lambda d, ad: d.name and d.name.startswith("HPCS"),
-        timeout=60,
+        timeout=600,
     )
 
 
