@@ -232,6 +232,19 @@ async def device_session_task(
         await asyncio.to_thread(stop_event.wait)
 
 
+async def monitor_device_task(ctx: ServerContext) -> None:
+    try:
+        await ctx.device_task
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        ctx.errors.put(exc)
+        ctx.stop_event.set()
+        child_proc = ctx.child_proc
+        if child_proc is not None and child_proc.poll() is None:
+            child_proc.terminate()
+
+
 def parse_request(line: str) -> tuple[str, str | None]:
     command, separator, payload = line.rstrip("\n").partition("\t")
     if not separator:
@@ -325,9 +338,11 @@ async def run_argyll_server(request_fifo: Path, response_fifo: Path, command: li
     server_thread.start()
     return_code: int | None = None
     proc: subprocess.Popen[bytes] | None = None
+    monitor_task: asyncio.Task[None] | None = None
     try:
         proc = subprocess.Popen(command)
         context.child_proc = proc
+        monitor_task = asyncio.create_task(monitor_device_task(context))
         return_code = await asyncio.to_thread(proc.wait)
     finally:
         context.stop_event.set()
@@ -340,6 +355,13 @@ async def run_argyll_server(request_fifo: Path, response_fifo: Path, command: li
                 proc.kill()
                 await asyncio.to_thread(proc.wait)
         await asyncio.to_thread(server_thread.join, 1.0)
+        if monitor_task is not None:
+            if not monitor_task.done():
+                monitor_task.cancel()
+            try:
+                await monitor_task
+            except asyncio.CancelledError:
+                pass
         if not context.device_task.done():
             context.device_task.cancel()
         try:
