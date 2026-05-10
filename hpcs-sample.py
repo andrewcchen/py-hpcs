@@ -200,6 +200,10 @@ async def capture_sample():
     return True
 
 
+def instrument_name() -> str:
+    return s.device_info.name.strip()
+
+
 def extract_spectrum_range(
     processed: tuple[dict[str, float], list[float]],
     start_nm: int,

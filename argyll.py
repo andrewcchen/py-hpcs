@@ -28,6 +28,7 @@ Sample = tuple[dict[str, float], list[float]]
 class SampleModule(Protocol):
     async def capture_processed_sample(self) -> Sample | bool: ...
     def device_session(self) -> AbstractAsyncContextManager[object]: ...
+    def instrument_name(self) -> str: ...
 
 
 @dataclass
@@ -49,6 +50,7 @@ class ServerContext:
 class Measurement:
     sample: Sample
     xyz: XYZ
+    instrument_name: str
 
 
 def load_sample_module() -> SampleModule:
@@ -140,11 +142,19 @@ def write_sp_file(command_path: str, sample: Sample) -> None:
     Path(f"{command_path}.sp").write_text(format_sp(sample), encoding="ascii")
 
 
+def write_name_file(command_path: str, instrument_name: str) -> None:
+    Path(f"{command_path}.name").write_text(instrument_name, encoding="ascii")
+
+
 async def capture_measurement(sample_mod: SampleModule) -> Measurement:
     while True:
         sample = await sample_mod.capture_processed_sample()
         if sample is not False:
-            return Measurement(sample=sample, xyz=xyz_from_sample(sample))
+            return Measurement(
+                sample=sample,
+                xyz=xyz_from_sample(sample),
+                instrument_name=sample_mod.instrument_name(),
+            )
 
 
 def format_meas(xyz: XYZ) -> str:
@@ -246,6 +256,7 @@ def handle_measure_request(ctx: ServerContext, command_path: str | None) -> None
     measurement = future.result()
     if command_path:
         write_sp_file(command_path, measurement.sample)
+        write_name_file(command_path, measurement.instrument_name)
     with ctx.response_fifo.open("w", encoding="ascii") as response_stream:
         response_stream.write(format_meas(measurement.xyz))
         response_stream.flush()
